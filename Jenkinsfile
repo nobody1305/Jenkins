@@ -394,7 +394,7 @@ def call(Map pipelineParams) {
             container('python') {
                 script {
                     // Set the API endpoint
-                    def api_endpoint = 'http://tf-env-controller-service.prod.svc.cluster.local'
+                    def api_endpoint = ''
 
                     // Check the action type
                     if (env.gitlabActionType == 'MERGE' || env.gitlabActionType == 'NOTE') {
