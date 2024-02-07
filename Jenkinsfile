@@ -1,4 +1,5 @@
 def call(Map pipelineParams) {
+  // def project_name="abinitio_settlement_poc_nonprod_tf"
   pipeline {
     options {
       ansiColor('xterm')
@@ -12,7 +13,7 @@ def call(Map pipelineParams) {
       string(name: 'action_resource', defaultValue: '', description: 'Enter the Terraform action and resource to perform (e.g. 1. terraform plan destroy "plan -destroy -target=module.ec2-testing -out=resource.tfplan") 2. terraform import "import module.ec2-testing.aws_instance.this i-0a83527fb54347609" :')
     }
     environment {
-      AWSCRED="platform_core"
+      AWSCRED=""
       REGION='ap-southeast-1'
       AWS_DEFAULT_REGION = 'ap-southeast-1'
       INFRACOST_API_KEY = ""
@@ -39,30 +40,48 @@ def call(Map pipelineParams) {
             // ]]) {
             container('terraform') {
               sshagent(credentials: ['xladmin']) {
-                def gitLogOutput1 = sh(script: "git log -n 1 -p -- prod",returnStdout: true).trim()
+                sh 'git log'
+                def gitLogOutput1 = sh(script: "git log -n 1 -p",returnStdout: true).trim()
+                echo gitLogOutput1
                 def jumlah1 = (gitLogOutput1.split('/').size() - 1)/3
                 def gitLogOutput = sh(script: "git log -n 1 --grep='prod' --format='%b'",returnStdout: true).trim()
+                echo gitLogOutput
                 def jumlah = (gitLogOutput.split('/').size() - 1)/3
-                def uniqueProjects = new HashSet(), list_project = new HashSet(), uniqueProjectsList = new HashSet()
+                def uniqueProjects = new HashSet(), uniqueProjectsList = new HashSet()
                 def projects = int
-                for (int i = 1; i <= jumlah; i++) {
-                  projects = 2 + (i-1)*3
-                  if (jumlah1 == 4) {
-                    list_project = gitLogOutput1.split('/')[projects]
-                  }
-                  else {
-                    list_project = gitLogOutput.split('/')[projects]
-                  }
-                  uniqueProjects.add(list_project)
-                    if ('policies' in uniqueProjects){
-                      uniqueProjects.remove('policies')
-                      uniqueProjects.add('0_global_project')
+                if (jumlah1 == 4) {
+                    for (int i = 1; i <= jumlah1; i++) {
+                        projects = 2 + (i - 1) * 3
+                        def list_project = gitLogOutput1.split('/')[projects]
+                        uniqueProjects.add(list_project)
+                    }
+                } else {
+                    for (int i = 1; i <= jumlah; i++) {
+                        projects = 2 + (i - 1) * 3
+                        def list_project = gitLogOutput.split('/')[projects]
+                        uniqueProjects.add(list_project)
                     }
                 }
+                // Check if 'policies' is present and replace it with '0_policy_creation'
+                if (uniqueProjects.contains('policies')) {
+                    uniqueProjects.remove('policies')
+                    uniqueProjects.add('0_policy_creation')
+                }
                 uniqueProjectsList = uniqueProjects.toList()
-                if ('0_global_project' in uniqueProjectsList){
-                  uniqueProjectsList.remove('0_global_project')
-                  uniqueProjectsList.add(0,'0_global_project')
+                if ('0_global_project' in uniqueProjectsList && !('0_policy_creation' in uniqueProjectsList)) {
+                    uniqueProjectsList.remove('0_global_project')
+                    uniqueProjectsList.add(0, '0_global_project')
+                }
+                else if ('0_policy_creation' in uniqueProjectsList && '0_global_project' in uniqueProjectsList) {
+                    uniqueProjectsList.removeAll(['0_policy_creation', '0_global_project'])
+                    uniqueProjectsList.add(0, '0_policy_creation')
+                    uniqueProjectsList.add(1, '0_global_project')
+                }
+                else {
+                    if ('0_policy_creation' in uniqueProjectsList) {
+                        uniqueProjectsList.remove('0_policy_creation')
+                        uniqueProjectsList.add(0, '0_policy_creation')
+                    }
                 }
                 env.UNIQUE_PROJECTS = uniqueProjectsList
                 echo "list project: ${UNIQUE_PROJECTS}"
@@ -394,7 +413,7 @@ def call(Map pipelineParams) {
             container('python') {
                 script {
                     // Set the API endpoint
-                    def api_endpoint = ''
+                    def api_endpoint = 'http://tf-env-controller-service.prod.svc.cluster.local'
 
                     // Check the action type
                     if (env.gitlabActionType == 'MERGE' || env.gitlabActionType == 'NOTE') {
@@ -531,27 +550,37 @@ def call(Map pipelineParams) {
                       //   // echo "project_${i}"
                         sh '''
                         for variable in ${UNIQUE_PROJECTS}; do
-                        pwd
-                        ls
-                        project=$(echo "$variable" | tr -d '[,]')
-                        if [ "$project" == "0_global_project" ]; then
-                          cp ./prod/variables.tf ./prod/$project/variables.tf
-                        else
-                          cp ./prod/main.tf "./prod/$project/main.tf"
-                          cp ./prod/terraform.tfvars ./prod/$project/terraform.tfvars
-                          cp ./prod/variables.tf ./prod/$project/variables.tf
-                          sed -i "s]baseline/sso-manual-creation/terraform.tfstate]baseline/sso-manual-creation/prod/$project/terraform.tfstate]g" "./prod/$project/main.tf"
-                        fi
-                        ls ./prod/$project
-                        cat ./prod/$project/main.tf
-                        pwd
-                        cd ./prod/$project && \
-                        terraform init -input=false
-                        terraform output ${output} -no-color
-                        terraform plan -out=$project-terraform.tfplan -input=false -lock=false -var-file=${tfvars}
-                        cd ..
-                        cd ..
-                        ls
+                            pwd
+                            ls
+                            project=$(echo "$variable" | tr -d '[,]')
+                            if [ "$project" == "0_global_project" ]; then
+                              cp ./prod/variables.tf "./prod/$project/variables.tf"
+                              cp ./prod/main.tf "./prod/$project/main.tf"
+                              cp ./prod/terraform.tfvars "./prod/$project/terraform.tfvars"
+                              sed -i "s]baseline/sso-manual-creation/terraform.tfstate]baseline/sso-manual-creation/prod/$project/terraform.tfstate]g" "./prod/$project/main.tf"
+                            elif [ "$project" == "0_policy_creation" ]; then
+                              touch "./prod/$project/users.csv" && echo -e 'id,email,first_name,last_name' > "./prod/$project/users.csv"
+                              touch "./prod/$project/groups_and_account_assignment.csv" && echo -e 'id,display_name,account_id,permission_set_name' > "./prod/$project/groups_and_account_assignment.csv"
+                              touch "./prod/$project/groups.csv" && echo -e 'id,display_name,description' > "./prod/$project/groups.csv"
+                              touch "./prod/$project/user_mapping.csv" && echo -e 'id,user_name,group_name' > "./prod/$project/user_mapping.csv"
+                              cp ./prod/variables.tf "./prod/$project/variables.tf"
+                            else
+                              touch "./prod/$project/users.csv" && echo -e 'id,email,first_name,last_name' > "./prod/$project/users.csv"
+                              cp ./prod/main.tf "./prod/$project/main.tf"
+                              cp ./prod/terraform.tfvars "./prod/$project/terraform.tfvars"
+                              cp ./prod/variables.tf "./prod/$project/variables.tf"
+                              sed -i "s]baseline/sso-manual-creation/terraform.tfstate]baseline/sso-manual-creation/prod/$project/terraform.tfstate]g" "./prod/$project/main.tf"
+                            fi
+                            ls ./prod/$project
+                            cat ./prod/$project/main.tf
+                            pwd
+                            cd ./prod/$project && \
+                            terraform init -input=false
+                            terraform output ${output} -no-color
+                            terraform plan -out=$project-terraform.tfplan -input=false -lock=false -var-file=${tfvars}
+                            cd ..
+                            cd ..
+                            ls
                         done
                         '''
                       // }
@@ -657,13 +686,13 @@ def call(Map pipelineParams) {
                       sshagent (credentials: ['xladmin']){
                         sh '''
                         for variable in ${UNIQUE_PROJECTS}; do
-                        ls
-                        project=$(echo "$variable" | tr -d '[,]')
-                        cd ./prod/$project && \
-                        terraform apply -input=false "$project-terraform.tfplan"
-                        terraform output -state=$project-terraform.tfplan
-                        cd ..
-                        cd ..
+                            ls
+                            project=$(echo "$variable" | tr -d '[,]')
+                            cd ./prod/$project && \
+                            terraform apply -input=false "$project-terraform.tfplan"
+                            terraform output -state=$project-terraform.tfplan
+                            cd ..
+                            cd ..
                         done
                         '''
                       }
