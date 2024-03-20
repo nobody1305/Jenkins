@@ -1,0 +1,52 @@
+steps {
+                  catchError(buildResult: 'SUCCESS', stageResult: 'FAILURE') {
+                    updateGitlabCommitStatus name: 'apply', state: 'running'
+                    withCredentials([[
+                                        $class: 'AmazonWebServicesCredentialsBinding',
+                                        accessKeyVariable: 'AWS_ACCESS_KEY_ID',
+                                        credentialsId: AWSCRED,  // ID of credentials in Jenkins
+                                        secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
+
+                                    ]]){
+                      container('terraform') {
+                        sshagent (credentials: ['xladmin']){
+
+                          sh '''
+                                if [ ${environment} == "prod" ]; then
+                                  set +x
+                                  export AWS_ACCESS_KEY_ID=${HW_ACCESS_KEY} 
+                                  export AWS_SECRET_ACCESS_KEY=${HW_SECRET_KEY}
+                                  export access_key=${HW_ACCESS_KEY}
+                                  export secret_key=${HW_SECRET_KEY}
+                                  set -x
+                                else
+                                  set +x
+                                  export AWS_ACCESS_KEY_ID=${HW_ACCESS_KEY} 
+                                  export AWS_SECRET_ACCESS_KEY=${HW_SECRET_KEY}
+                                  export access_key=${HW_ACCESS_KEY}
+                                  export secret_key=${HW_SECRET_KEY}
+                                  set -x
+                                fi
+                                if [ -f main.template ]
+                                then
+                                  true
+                                elif [ ! -d ${environment}  ]
+                                then
+                                    cd prod/
+                                else
+                                    cd ${environment}
+                                fi
+                                export TF_LOG=DEBUG
+                                pwd
+                                export TF_LOG_PATH=./terraform.log
+                                ls -a
+                                terraform apply -input=false "terraform.tfplan" || {
+                                    terraform output
+                                    cat ./terraform.log
+                                }
+                                '''
+                        }
+                      }
+                    }
+                  }
+                }
