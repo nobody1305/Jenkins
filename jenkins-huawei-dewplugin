@@ -1,0 +1,19 @@
+
+    environment {
+      ACCESS_KEY = credentials('AK-Huawei') 
+      SECRET_KEY = credentials('SK-Huawei') 
+    }
+        stage('GetContracts'){
+          steps {
+            script {
+
+                   def json = getContracts(accessKey:ACCESS_KEY, region: 'ap-southeast-4', secretKey:SECRET_KEY, secretName: 'MasterTerraform')        
+                   def jsonSlurper = new groovy.json.JsonSlurper()
+                   def contractsJson = jsonSlurper.parseText(json)
+                   
+                    env.HW_ACCESS_KEY = contractsJson.AK 
+                    env.HW_SECRET_KEY = contractsJson.SK
+
+              }
+            }
+          }
