@@ -341,7 +341,22 @@ EOF
           }
         }
       }
+      stage('Create tf-exec-admin role'){
+        steps{
+            script{
+                skip_stage = input message: "Create tf-exec-admin role?", parameters: [
+                choice(name: 'skip_stage', choices: ['Create', 'Skip'], description: 'Whether Create tf-exec-admin role')]
+
+                env.SKIP_STAGE = skip_stage
+                sh script: 'echo ${SKIP_STAGE}'
+              
+            }
+        }
+      }
       stage('tf-exec-admin Role Creation') {
+            when {
+                expression { return env.SKIP_STAGE == 'Create' }  // Check the boolean condition
+            }
             steps {
                 script {
                   container('terraform'){
