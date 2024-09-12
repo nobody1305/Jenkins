@@ -1,0 +1,349 @@
+def call(Map pipelineParams) {
+ 
+  pipeline {
+    options {
+      ansiColor('xterm')
+      timestamps()
+      disableConcurrentBuilds()
+    }
+    environment {
+      AWSCRED=""
+      REGION='ap-southeast-1'
+      AWS_DEFAULT_REGION = 'ap-southeast-1'
+      INFRACOST_API_KEY = ""
+      GIT_SSH_COMMAND = "ssh -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no"
+    }
+    agent {
+      kubernetes {
+        cloud 'devops-green'
+        inheritFrom 'kube-agent'
+        namespace 'default'
+        yaml kubernetesPodTemplate(TF_VERSION: "${pipelineParams.TF_VERSION}")
+        showRawYaml false
+      }
+    }
+    
+    stages {
+      stage('Input Account Name'){
+        steps{
+            script{
+            
+                account_name = input message: 'Export AWS Programmatic Access:', parameters: [
+                        string(description: 'Account Name', defaultValue: '', name: 'account_name')]
+                env.ACCOUNT_NAME = account_name 
+
+                environment = input message: "Environment", parameters: [
+                  choice(name: 'environment', choices: ['NonProd', 'Prod'], description: 'Choose environment')]
+
+                env.ENVIRONMENT = environment
+                sh script: 'echo ${ACCOUNT_NAME}-${ENVIRONMENT}'
+
+                region = input message: "Region Data", parameters: [
+                  choice(name: 'region', choices: ['ap-southeast-3', 'ap-southeast-1'], description: 'Choose region')]
+
+                env.REGION_DATA = region
+                sh script: 'echo ${REGION_DATA}'
+              
+            }
+        }
+      }
+      stage('Security Baseline Clean Up') {
+        steps {
+          script {
+              withCredentials([[
+                                  $class           : 'AmazonWebServicesCredentialsBinding',
+                                  accessKeyVariable: 'AWS_ACCESS_KEY_ID',
+                                  credentialsId    : AWSCRED,  // ID of credentials in Jenkins
+                                  secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
+
+                                    ]]) {
+                container('terraform') {
+                  sshagent(credentials: ['xladmin']) {
+                  sh script: 'echo ${REGION_DATA}'
+                  sh '''
+                    export ACCOUNT_NAME=$(echo "$ACCOUNT_NAME" | tr '[:upper:]' '[:lower:]')
+                    export ENVIRONMENT=$(echo "$ENVIRONMENT" | tr '[:upper:]' '[:lower:]')
+                    git clone git@gitrepo.xlaxiata.id:terraform/cloud-infra/aws/security-core.git
+                    if [ "$REGION_DATA" == "ap-southeast-3" ]; then
+                        cd security-core
+                        cd "${ACCOUNT_NAME}-${ENVIRONMENT}/ap-southeast-1"
+                        terraform init -input=false
+                        terraform destroy -auto-approve
+                        cd ../..
+
+                        cd "${ACCOUNT_NAME}-${ENVIRONMENT}/ap-southeast-3"
+                        terraform init -input=false
+                        terraform destroy -auto-approve
+                        cd ../..
+
+                    else
+                        cd security-core
+                        cd "${ACCOUNT_NAME}-${ENVIRONMENT}/ap-southeast-3"
+                        terraform init -input=false
+                        terraform destroy -auto-approve
+                        cd ../..
+
+                        cd "${ACCOUNT_NAME}-${ENVIRONMENT}/ap-southeast-1"
+                        terraform init -input=false
+                        terraform destroy -auto-approve
+                        cd ../..
+
+                    fi
+                    rm -rf "${ACCOUNT_NAME}-${ENVIRONMENT}"
+                    ls
+                    '''    
+                  }
+                }
+              }
+            
+          }
+        }
+      }
+      stage('AWS SSO Clean Up') {
+        steps {
+          script {
+              withCredentials([[
+                                  $class           : 'AmazonWebServicesCredentialsBinding',
+                                  accessKeyVariable: 'AWS_ACCESS_KEY_ID',
+                                  credentialsId    : AWSCRED,  // ID of credentials in Jenkins
+                                  secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
+
+                                    ]]) {
+                container('terraform') {
+                  sshagent(credentials: ['xladmin']) {
+                    sh '''
+                    git clone git@gitrepo.xlaxiata.id:terraform/cloud-infra/aws/aws-sso-azure-ad-federated.git
+                    cd aws-sso-azure-ad-federated/prod
+                    ls 
+                    export project=${ACCOUNT_NAME}-${ENVIRONMENT}
+                    echo $project
+                    touch "./$project/users.csv"
+                    echo -e 'id,email,first_name,last_name' > "./$project/users.csv"
+                    touch "./$project/user_mapping.csv"
+                    echo -e 'id,user_name,group_name' > "./$project/user_mapping.csv"
+                    touch "./$project/groups.csv"
+                    echo -e 'id,display_name,description' > "./$project/groups.csv"
+                    rm "./$project/groups_and_account_assignment.csv"
+                    touch "./$project/groups_and_account_assignment.csv"
+                    echo -e 'id,display_name,account_id,permission_set_name' > "./$project/groups_and_account_assignment.csv"
+                    cp ./main.tf "./$project/main.tf"
+                    cp ./terraform.tfvars "./$project/terraform.tfvars"
+                    cp ./variables.tf "./$project/variables.tf"
+                    sed -i "s]baseline/xl-sso/terraform.tfstate]baseline/xl-sso/prod/$project/terraform.tfstate]g" "./$project/main.tf"
+                    cat ./$project/main.tf
+                    '''
+                    sh '''
+                    pwd
+                    cat ./aws-sso-azure-ad-federated/prod/${ACCOUNT_NAME}-${ENVIRONMENT}/groups_and_account_assignment.csv
+                    cd ./aws-sso-azure-ad-federated/prod/${ACCOUNT_NAME}-${ENVIRONMENT} && \
+                    terraform init -input=false
+                    #terraform plan -out=${ACCOUNT_NAME}-${ENVIRONMENT}-terraform.tfplan -input=false -lock=false
+                    terraform apply -auto-approve
+                    ls
+                    cd ..
+                    rm -rf "${ACCOUNT_NAME}-${ENVIRONMENT}"
+                    ls
+                    git add .
+                    git status
+                    '''
+                  }
+                }
+              }
+            
+          }
+        }
+      }
+      stage('Disable Jakarta Region') {
+        steps {
+          script {
+              withCredentials([[
+                                  $class           : 'AmazonWebServicesCredentialsBinding',
+                                  accessKeyVariable: 'AWS_ACCESS_KEY_ID',
+                                  credentialsId    : AWSCRED,  // ID of credentials in Jenkins
+                                  secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
+
+                                    ]]) {
+                container('terraform') {
+                  sshagent(credentials: ['xladmin']) {
+                    sh '''
+                    cd aws-sso-azure-ad-federated
+                    echo ${ACCOUNT_ID}
+                    echo ${ACCOUNT_NAME}
+                    export ACCOUNT_NAME=$(echo "$ACCOUNT_NAME" | tr '[:upper:]' '[:lower:]')
+                    export ENVIRONMENT=$(echo "$ENVIRONMENT" | tr '[:upper:]' '[:lower:]')
+                    export deleted_account=${ACCOUNT_NAME}-${ENVIRONMENT}
+                    export project=0_policy_creation
+                    touch "./prod/$project/users.csv" 
+                    echo -e 'id,email,first_name,last_name' > "./prod/$project/users.csv"
+                    touch "./prod/$project/groups_and_account_assignment.csv" 
+                    echo -e 'id,display_name,account_id,permission_set_name' > "./prod/$project/groups_and_account_assignment.csv"
+                    touch "./prod/$project/groups.csv" 
+                    echo -e 'id,display_name,description' > "./prod/$project/groups.csv"
+                    touch "./prod/$project/user_mapping.csv" 
+                    echo -e 'id,user_name,group_name' > "./prod/$project/user_mapping.csv"
+                    cp ./prod/variables.tf "./prod/$project/variables.tf"
+                    cd prod/$project
+                    awk "!/$deleted_account/" terraform.tfvars > temp && mv temp terraform.tfvars
+                    ls
+                    terraform init -input=false
+                    terraform plan -out=${ACCOUNT_NAME}-${ENVIRONMENT}-terraform.tfplan -input=false -lock=false 
+                    terraform apply -input=false "${ACCOUNT_NAME}-${ENVIRONMENT}-terraform.tfplan"
+                    rm "${ACCOUNT_NAME}-${ENVIRONMENT}-terraform.tfplan"
+                    ls
+                    '''      
+                    sh script: "tail ./aws-sso-azure-ad-federated/prod/0_policy_creation/terraform.tfvars"
+                  }
+                }
+              }
+            
+          }
+        }
+      }
+      stage('Modify Master Org Core') {
+        steps{
+           script{
+            container('terraform') {
+              sshagent(credentials: ['xladmin']) {
+
+                sh '''
+                git clone git@gitrepo.xlaxiata.id:terraform/cloud-infra/aws/master-org-core.git
+                cd master-org-core
+                export ACCOUNT_NAME=$(echo "$ACCOUNT_NAME" | tr '[:upper:]' '[:lower:]')
+                export ENVIRONMENT=$(echo "$ENVIRONMENT" | tr '[:upper:]' '[:lower:]')
+                export deleted_account=${ACCOUNT_NAME}-${ENVIRONMENT}
+                sed -i "/resource \\"aws_organizations_account\\" \\"${ACCOUNT_NAME}-${ENVIRONMENT}\\"/,+6d" accounts.tf
+                sed -i "/output \\"${ACCOUNT_NAME}${ENVIRONMENT}_id\\"/,+2d" outputs.tf
+                awk "!/$deleted_account/" terraform.tfvars > temp && mv temp terraform.tfvars
+                sed -i "/variable \\"${ACCOUNT_NAME}-${ENVIRONMENT}_acc\\"/,+2d" variables.tf
+                sed -i "/variable \\"${ACCOUNT_NAME}-${ENVIRONMENT}_email\\"/,+2d" variables.tf
+                ls
+                '''
+                sh script: "tail ./master-org-core/accounts.tf"
+                sh script: "tail ./master-org-core/terraform.tfvars"
+                sh script: "tail ./master-org-core/outputs.tf"
+                sh script: "tail ./master-org-core/variables.tf"
+
+              }
+            }
+           }
+        }
+      }
+      stage('Account Termination - Terraform Plan') {
+        steps {
+          script {
+              withCredentials([[
+                                  $class           : 'AmazonWebServicesCredentialsBinding',
+                                  accessKeyVariable: 'AWS_ACCESS_KEY_ID',
+                                  credentialsId    : AWSCRED,  // ID of credentials in Jenkins
+                                  secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
+
+                                    ]]) {
+                container('terraform') {
+                  sshagent(credentials: ['xladmin']) {
+                    sh '''
+                    export ACCOUNT_NAME=$(echo "$ACCOUNT_NAME" | tr '[:upper:]' '[:lower:]')
+                    export ENVIRONMENT=$(echo "$ENVIRONMENT" | tr '[:upper:]' '[:lower:]')
+                    cd master-org-core/
+                    terraform init -input=false
+                    terraform plan -out=${ACCOUNT_NAME}-${ENVIRONMENT}-terraform.tfplan -input=false -lock=false 
+                    '''    
+                  }
+                }
+              }
+            
+          }
+        }
+      }
+      stage('Terminate Account?'){
+        options {
+          timeout(time:35, unit: 'MINUTES')
+        }
+        steps{
+          script{
+            echo "\033[41m The environment is: ${ENVIRONMENT} \033[0m"
+            echo "\033[31m The environment is: ${ENVIRONMENT} \033[0m"
+            def userInput = input(id: 'confirm', message: 'Terminate Account?', parameters: [ [$class: 'BooleanParameterDefinition', defaultValue: false, description: 'Apply terraform ?', name: 'confirm'] ])
+          }
+        }
+      }
+      stage('Account Termination') {
+        steps {
+          script {
+              withCredentials([[
+                                  $class           : 'AmazonWebServicesCredentialsBinding',
+                                  accessKeyVariable: 'AWS_ACCESS_KEY_ID',
+                                  credentialsId    : AWSCRED,  // ID of credentials in Jenkins
+                                  secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
+
+                                    ]]) {
+                container('terraform') {
+                  sshagent(credentials: ['xladmin']) {
+                    sh '''
+                    export ACCOUNT_NAME=$(echo "$ACCOUNT_NAME" | tr '[:upper:]' '[:lower:]')
+                    export ENVIRONMENT=$(echo "$ENVIRONMENT" | tr '[:upper:]' '[:lower:]')
+                    cd master-org-core/
+                    terraform init -input=false
+                    terraform apply -input=false "${ACCOUNT_NAME}-${ENVIRONMENT}-terraform.tfplan"
+                    rm "${ACCOUNT_NAME}-${ENVIRONMENT}-terraform.tfplan"
+                    '''
+                  }
+                }
+              }
+            
+          }
+        }
+      }
+      stage('Push To Gitrepo') {
+        steps {
+          script {
+              withCredentials([[
+                                  $class           : 'AmazonWebServicesCredentialsBinding',
+                                  accessKeyVariable: 'AWS_ACCESS_KEY_ID',
+                                  credentialsId    : AWSCRED,  // ID of credentials in Jenkins
+                                  secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
+
+                                    ]]) {
+                container('terraform') {
+                  sshagent(credentials: ['xladmin']) {
+                    sh '''
+                    cd aws-sso-azure-ad-federated/prod
+                    git status
+                    git add 0_policy_creation/terraform.tfvars
+                    git status
+                    git commit -m "${ACCOUNT_NAME}-${ENVIRONMENT} aws sso clean up"
+                    git push origin master
+                    '''     
+                    sh '''
+                    cd security-core
+                    git status
+                    git add .
+                    git commit -m "${ACCOUNT_NAME}-${ENVIRONMENT} security baseline clean up"
+                    git push origin master
+                    ''' 
+                    sh '''
+                    cd master-org-core
+                    git status
+                    git add .
+                    git commit -m "${ACCOUNT_NAME}-${ENVIRONMENT} account termination"
+                    git push origin master
+                    '''
+                  }
+                }
+              }
+            
+          }
+        }
+      }
+    }
+    post{
+      success {
+        echo '===== Pipeline Executed Successfully ====='
+        updateGitlabCommitStatus name: 'plan', state: 'success'
+      }
+      failure {
+        echo '===== Pipeline Failed ====='
+        updateGitlabCommitStatus name: 'plan', state: 'failed'
+      }
+    }
+  }
+}
