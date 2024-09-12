@@ -72,6 +72,7 @@ else
 
     # Append the aws_organizations_account resource to accounts.tf
     cat >> ./master-org-core/accounts.tf << EOF
+
 resource "aws_organizations_account" "${ACCOUNT_NAME}-${ENVIRONMENT}" {
   name              = var.${ACCOUNT_NAME}-${ENVIRONMENT}_acc
   email             = var.${ACCOUNT_NAME}-${ENVIRONMENT}_email
@@ -79,6 +80,7 @@ resource "aws_organizations_account" "${ACCOUNT_NAME}-${ENVIRONMENT}" {
   close_on_deletion = true
   parent_id         = var.tf_ou_${ENVIRONMENT}
 }
+
 EOF
 
     # Append the output block to outputs.tf
@@ -90,13 +92,16 @@ EOF
 
     # Append the account name and email to terraform.tfvars
     cat >> ./master-org-core/terraform.tfvars << EOF
+
 # ${ACCOUNT_NAME}-${ENVIRONMENT}
 ${ACCOUNT_NAME}-${ENVIRONMENT}_acc   = "${ACCOUNT_NAME}-${ENVIRONMENT}"
 ${ACCOUNT_NAME}-${ENVIRONMENT}_email = "aws.${ACCOUNT_NAME}.${ENVIRONMENT}@xl.co.id"
+
 EOF
 
     # Append the variables for account name and email to variables.tf
     cat >> ./master-org-core/variables.tf << EOF
+
 variable "${ACCOUNT_NAME}-${ENVIRONMENT}_acc" {
   description = "Specify Account Name"
 }
@@ -104,6 +109,7 @@ variable "${ACCOUNT_NAME}-${ENVIRONMENT}_acc" {
 variable "${ACCOUNT_NAME}-${ENVIRONMENT}_email" {
   description = "Specify Account Email Address"
 }
+
 EOF
 
     echo "Resource $RESOURCE_NAME added successfully."
@@ -137,7 +143,7 @@ fi
                     export ENVIRONMENT=$(echo "$ENVIRONMENT" | tr '[:upper:]' '[:lower:]')
                     cd master-org-core/
                     terraform init -input=false
-                    terraform plan -input=false -lock=false 
+                    terraform plan -out=${ACCOUNT_NAME}-${ENVIRONMENT}-terraform.tfplan -input=false -lock=false  
                     '''    
                   }
                 }
@@ -175,7 +181,8 @@ fi
                     export ENVIRONMENT=$(echo "$ENVIRONMENT" | tr '[:upper:]' '[:lower:]')
                     cd master-org-core/
                     terraform init -input=false
-                    terraform apply -auto-approve
+                    terraform apply -input=false "${ACCOUNT_NAME}-${ENVIRONMENT}-terraform.tfplan"
+                    rm "${ACCOUNT_NAME}-${ENVIRONMENT}-terraform.tfplan"
                     export ACCOUNT_ID=$(terraform output ${ACCOUNT_NAME}${ENVIRONMENT}_id | tr -d '"' )
                     echo $ACCOUNT_ID >> account_id.txt
                     export ACCOUNT_IDS=$(terraform output ${ACCOUNT_NAME}${ENVIRONMENT}_id)
